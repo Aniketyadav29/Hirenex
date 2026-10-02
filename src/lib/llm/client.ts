@@ -173,7 +173,7 @@ async function groqChat(
   const apiKey = process.env.GROQ_API_KEY;
   if (!apiKey) throw new Error("GROQ_API_KEY not set");
 
-  const model = process.env.GROQ_MODEL ?? "llama-3.1-8b-instant";
+  const model = process.env.GROQ_MODEL ?? "openai/gpt-oss-120b";
 
   const body: Record<string, unknown> = {
     model,
@@ -211,7 +211,7 @@ async function* groqStream(
   const apiKey = process.env.GROQ_API_KEY;
   if (!apiKey) throw new Error("GROQ_API_KEY not set");
 
-  const model = process.env.GROQ_MODEL ?? "llama-3.1-8b-instant";
+  const model = process.env.GROQ_MODEL ?? "openai/gpt-oss-120b";
 
   const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
     method: "POST",
@@ -300,7 +300,7 @@ async function* vllmStream(
 // ─── JSON Output Parser (with retry) ─────────────────────────────────────────
 export async function llmJSON<T>(
   messages: LLMMessage[],
-  options: { temperature?: number; retries?: number } = {}
+  options: { temperature?: number; max_tokens?: number; retries?: number } = {}
 ): Promise<T> {
   const retries = options.retries ?? 2;
 
@@ -308,15 +308,30 @@ export async function llmJSON<T>(
     try {
       const response = await llmChat(messages, {
         temperature: options.temperature ?? 0.2,
+        max_tokens: options.max_tokens,
         json_mode: true,
       });
 
-      // Strip markdown code fences if present
-      const cleaned = response.content
+      // Strip markdown code fences if present and extract JSON object or array
+      let cleaned = response.content
         .replace(/^```json\s*/i, "")
         .replace(/^```\s*/i, "")
         .replace(/```\s*$/i, "")
         .trim();
+
+      const firstBrace = cleaned.indexOf("{");
+      const firstBracket = cleaned.indexOf("[");
+      if (firstBrace !== -1 && (firstBracket === -1 || firstBrace < firstBracket)) {
+        const lastBrace = cleaned.lastIndexOf("}");
+        if (lastBrace !== -1) {
+          cleaned = cleaned.slice(firstBrace, lastBrace + 1);
+        }
+      } else if (firstBracket !== -1) {
+        const lastBracket = cleaned.lastIndexOf("]");
+        if (lastBracket !== -1) {
+          cleaned = cleaned.slice(firstBracket, lastBracket + 1);
+        }
+      }
 
       return JSON.parse(cleaned) as T;
     } catch (err) {
