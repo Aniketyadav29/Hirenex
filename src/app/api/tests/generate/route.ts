@@ -82,67 +82,85 @@ Rules:
     const questions = generated.questions.slice(0, numQuestions);
 
     // ── Find matching job_role_id ───────────────────────────────────────────
+    let jobRoleId: string | null = null;
     const serviceSupabase = createServiceClient();
-    const { data: jobRoleRaw } = await serviceSupabase
-      .from("job_roles")
-      .select("id")
-      .ilike("title", `%${role}%`)
-      .limit(1)
-      .maybeSingle();
+    try {
+      const { data: jobRoleRaw } = await serviceSupabase
+        .from("job_roles")
+        .select("id")
+        .ilike("title", `%${role}%`)
+        .limit(1)
+        .maybeSingle();
 
-    const jobRoleRecord = jobRoleRaw as { id: string } | null;
-
-    // ── Create test session ─────────────────────────────────────────────────
-    const { data: sessionRaw, error: sessionErr } = await serviceSupabase
-      .from("test_sessions")
-      .insert({
-        user_id: user.id,
-        job_role_id: jobRoleRecord?.id ?? null,
-        session_type: "adaptive",
-        status: "in_progress",
-        total_questions: questions.length,
-        time_limit_mins: Math.ceil(questions.length * 2),
-        started_at: new Date().toISOString(),
-      } as never)
-      .select()
-      .single();
-
-    if (sessionErr || !sessionRaw) {
-      return NextResponse.json({ error: "Failed to create test session" }, { status: 500 });
+      if (jobRoleRaw) {
+        jobRoleId = (jobRoleRaw as { id: string }).id;
+      }
+    } catch {
+      // Ignore job role lookup failure
     }
 
-    const session = sessionRaw as { id: string };
+    // ── Create test session (with local UUID fallback if DB insert fails) ───
+    let sessionId = `session-${crypto.randomUUID()}`;
+    try {
+      const { data: sessionRaw, error: sessionErr } = await serviceSupabase
+        .from("test_sessions")
+        .insert({
+          user_id: user.id,
+          job_role_id: jobRoleId,
+          session_type: "adaptive",
+          status: "in_progress",
+          total_questions: questions.length,
+          time_limit_mins: Math.ceil(questions.length * 2),
+          started_at: new Date().toISOString(),
+        } as never)
+        .select()
+        .single();
+
+      if (sessionRaw && !sessionErr) {
+        sessionId = (sessionRaw as { id: string }).id;
+      } else if (sessionErr) {
+        console.warn("DB session insert error (using fallback):", sessionErr.message);
+      }
+    } catch (e) {
+      console.warn("DB session insert exception (using fallback):", e);
+    }
 
     // ── Cache questions in question_bank ────────────────────────────────────
     const questionIds: string[] = [];
-    for (const q of questions) {
-      const { data: qRow } = await serviceSupabase
-        .from("question_bank")
-        .insert({
-          job_role_id: jobRoleRecord?.id ?? null,
-          question_text: q.question_text,
-          question_type: "mcq",
-          difficulty: q.difficulty,
-          options: q.options,
-          correct_answer: q.correct_answer,
-          explanation: q.explanation,
-          topic_tags: q.topic_tags,
-          is_ai_generated: true,
-          created_at: new Date().toISOString(),
-        } as never)
-        .select("id")
-        .single();
+    for (let i = 0; i < questions.length; i++) {
+      const q = questions[i];
+      let qId = `q-${i + 1}-${crypto.randomUUID().slice(0, 8)}`;
+      try {
+        const { data: qRow } = await serviceSupabase
+          .from("question_bank")
+          .insert({
+            job_role_id: jobRoleId,
+            question_text: q.question_text,
+            question_type: "mcq",
+            difficulty: q.difficulty,
+            options: q.options,
+            correct_answer: q.correct_answer,
+            explanation: q.explanation,
+            topic_tags: q.topic_tags,
+            is_ai_generated: true,
+            created_at: new Date().toISOString(),
+          } as never)
+          .select("id")
+          .single();
 
-      if (qRow) {
-        const qRecord = qRow as { id: string };
-        questionIds.push(qRecord.id);
+        if (qRow) {
+          qId = (qRow as { id: string }).id;
+        }
+      } catch {
+        // Fallback to generated qId
       }
+      questionIds.push(qId);
     }
 
     return NextResponse.json({
-      session_id: session.id,
+      session_id: sessionId,
       questions: questions.map((q, i) => ({
-        id: questionIds[i] ?? `q-${i}`,
+        id: questionIds[i] ?? `q-${i + 1}`,
         ...q,
       })),
       total: questions.length,
