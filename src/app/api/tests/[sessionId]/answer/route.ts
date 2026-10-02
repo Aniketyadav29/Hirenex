@@ -30,28 +30,41 @@ export async function POST(
     const is_correct = user_answer.trim().toLowerCase() === correct_answer.trim().toLowerCase();
 
     const serviceSupabase = createServiceClient();
+    let dbSessionFound = false;
 
-    // ── Verify session belongs to user ──────────────────────────────────────
-    const { data: sessionRaw } = await serviceSupabase
-      .from("test_sessions")
-      .select("id, user_id, total_questions")
-      .eq("id", sessionId)
-      .single();
+    // ── Verify session belongs to user (if stored in DB) ───────────────────
+    try {
+      const { data: sessionRaw } = await serviceSupabase
+        .from("test_sessions")
+        .select("id, user_id, total_questions")
+        .eq("id", sessionId)
+        .maybeSingle();
 
-    if (!sessionRaw) return NextResponse.json({ error: "Session not found" }, { status: 404 });
-    const session = sessionRaw as { id: string; user_id: string; total_questions: number };
-    if (session.user_id !== user.id) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+      if (sessionRaw) {
+        dbSessionFound = true;
+        const session = sessionRaw as { id: string; user_id: string; total_questions: number };
+        if (session.user_id !== user.id) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+      }
+    } catch {
+      // Continue with in-memory calculation if DB query fails
+    }
 
-    // ── Save answer ─────────────────────────────────────────────────────────
-    await serviceSupabase.from("test_answers").insert({
-      session_id: sessionId,
-      question_id,
-      user_answer,
-      is_correct,
-      time_taken_secs,
-      difficulty_at_attempt: difficulty,
-      created_at: new Date().toISOString(),
-    } as never);
+    // ── Save answer to DB if available ─────────────────────────────────────
+    if (dbSessionFound) {
+      try {
+        await serviceSupabase.from("test_answers").insert({
+          session_id: sessionId,
+          question_id,
+          user_answer,
+          is_correct,
+          time_taken_secs,
+          difficulty_at_attempt: difficulty,
+          created_at: new Date().toISOString(),
+        } as never);
+      } catch (e) {
+        console.warn("Could not save test answer to DB:", e);
+      }
+    }
 
     // ── If last question, finalize session ──────────────────────────────────
     let overall_score: number | null = null;
@@ -60,14 +73,20 @@ export async function POST(
       const correct = allAnswers.filter((a) => a.is_correct).length;
       overall_score = Math.round((correct / allAnswers.length) * 100);
 
-      await serviceSupabase
-        .from("test_sessions")
-        .update({
-          status: "completed",
-          completed_at: new Date().toISOString(),
-          overall_score,
-        } as never)
-        .eq("id", sessionId);
+      if (dbSessionFound) {
+        try {
+          await serviceSupabase
+            .from("test_sessions")
+            .update({
+              status: "completed",
+              completed_at: new Date().toISOString(),
+              overall_score,
+            } as never)
+            .eq("id", sessionId);
+        } catch (e) {
+          console.warn("Could not finalize test session in DB:", e);
+        }
+      }
     }
 
     return NextResponse.json({
