@@ -51,9 +51,11 @@ BEGIN
 END;
 $$;
 
+DROP TRIGGER IF EXISTS profiles_updated_at ON public.profiles;
 CREATE TRIGGER profiles_updated_at
   BEFORE UPDATE ON public.profiles
   FOR EACH ROW EXECUTE FUNCTION public.handle_updated_at();
+
 
 -- ─── ORGANIZATIONS ─────────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS public.organizations (
@@ -354,36 +356,47 @@ ALTER TABLE public.recruiter_views ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.recruiter_templates ENABLE ROW LEVEL SECURITY;
 
 -- Profiles: users see/edit only their own; admins see all
+DROP POLICY IF EXISTS "profiles_select_own" ON public.profiles;
 CREATE POLICY "profiles_select_own" ON public.profiles
   FOR SELECT USING (auth.uid() = id);
+DROP POLICY IF EXISTS "profiles_update_own" ON public.profiles;
 CREATE POLICY "profiles_update_own" ON public.profiles
   FOR UPDATE USING (auth.uid() = id);
 
 -- Resumes: users own their resumes
+DROP POLICY IF EXISTS "resumes_select_own" ON public.resumes;
 CREATE POLICY "resumes_select_own" ON public.resumes
   FOR SELECT USING (auth.uid() = user_id);
+DROP POLICY IF EXISTS "resumes_insert_own" ON public.resumes;
 CREATE POLICY "resumes_insert_own" ON public.resumes
   FOR INSERT WITH CHECK (auth.uid() = user_id);
+DROP POLICY IF EXISTS "resumes_update_own" ON public.resumes;
 CREATE POLICY "resumes_update_own" ON public.resumes
   FOR UPDATE USING (auth.uid() = user_id);
+DROP POLICY IF EXISTS "resumes_delete_own" ON public.resumes;
 CREATE POLICY "resumes_delete_own" ON public.resumes
   FOR DELETE USING (auth.uid() = user_id);
 
 -- Resume parsed data: owned by resume owner
+DROP POLICY IF EXISTS "resume_parsed_select" ON public.resume_parsed_data;
 CREATE POLICY "resume_parsed_select" ON public.resume_parsed_data
   FOR SELECT USING (
     EXISTS (SELECT 1 FROM public.resumes r WHERE r.id = resume_id AND r.user_id = auth.uid())
   );
 
 -- Interview sessions: own + public share token
+DROP POLICY IF EXISTS "interview_sessions_select_own" ON public.interview_sessions;
 CREATE POLICY "interview_sessions_select_own" ON public.interview_sessions
   FOR SELECT USING (auth.uid() = user_id OR recruiter_shared = TRUE);
+DROP POLICY IF EXISTS "interview_sessions_insert_own" ON public.interview_sessions;
 CREATE POLICY "interview_sessions_insert_own" ON public.interview_sessions
   FOR INSERT WITH CHECK (auth.uid() = user_id);
+DROP POLICY IF EXISTS "interview_sessions_update_own" ON public.interview_sessions;
 CREATE POLICY "interview_sessions_update_own" ON public.interview_sessions
   FOR UPDATE USING (auth.uid() = user_id);
 
 -- Interview Q&A: via session ownership
+DROP POLICY IF EXISTS "interview_qa_select" ON public.interview_qa;
 CREATE POLICY "interview_qa_select" ON public.interview_qa
   FOR SELECT USING (
     EXISTS (
@@ -391,32 +404,41 @@ CREATE POLICY "interview_qa_select" ON public.interview_qa
       WHERE s.id = session_id AND (s.user_id = auth.uid() OR s.recruiter_shared = TRUE)
     )
   );
+DROP POLICY IF EXISTS "interview_qa_insert" ON public.interview_qa;
 CREATE POLICY "interview_qa_insert" ON public.interview_qa
   FOR INSERT WITH CHECK (
     EXISTS (SELECT 1 FROM public.interview_sessions s WHERE s.id = session_id AND s.user_id = auth.uid())
   );
 
 -- Test sessions & answers: own only
+DROP POLICY IF EXISTS "test_sessions_own" ON public.test_sessions;
 CREATE POLICY "test_sessions_own" ON public.test_sessions
   FOR ALL USING (auth.uid() = user_id);
+DROP POLICY IF EXISTS "test_answers_own" ON public.test_answers;
 CREATE POLICY "test_answers_own" ON public.test_answers
   FOR ALL USING (
     EXISTS (SELECT 1 FROM public.test_sessions ts WHERE ts.id = session_id AND ts.user_id = auth.uid())
   );
 
 -- Skill profiles, gap reports, roadmap, snapshots: own only
+DROP POLICY IF EXISTS "user_skill_profiles_own" ON public.user_skill_profiles;
 CREATE POLICY "user_skill_profiles_own" ON public.user_skill_profiles
   FOR ALL USING (auth.uid() = user_id);
+DROP POLICY IF EXISTS "skill_gap_reports_own" ON public.skill_gap_reports;
 CREATE POLICY "skill_gap_reports_own" ON public.skill_gap_reports
   FOR ALL USING (auth.uid() = user_id);
+DROP POLICY IF EXISTS "roadmap_items_own" ON public.roadmap_items;
 CREATE POLICY "roadmap_items_own" ON public.roadmap_items
   FOR ALL USING (auth.uid() = user_id);
+DROP POLICY IF EXISTS "readiness_snapshots_own" ON public.readiness_snapshots;
 CREATE POLICY "readiness_snapshots_own" ON public.readiness_snapshots
   FOR ALL USING (auth.uid() = user_id);
 
 -- Recruiter policies
+DROP POLICY IF EXISTS "recruiter_views_own" ON public.recruiter_views;
 CREATE POLICY "recruiter_views_own" ON public.recruiter_views
   FOR ALL USING (auth.uid() = recruiter_id);
+DROP POLICY IF EXISTS "recruiter_templates_own" ON public.recruiter_templates;
 CREATE POLICY "recruiter_templates_own" ON public.recruiter_templates
   FOR ALL USING (auth.uid() = recruiter_id);
 
@@ -448,12 +470,22 @@ INSERT INTO public.skills (name, category, aliases) VALUES
 ('Kubernetes', 'DevOps', ARRAY['K8s']),
 ('AWS', 'Cloud', ARRAY['Amazon Web Services', 'Amazon AWS']),
 ('REST APIs', 'Backend', ARRAY['RESTful API', 'REST']),
-('GraphQL', 'Backend', ARRAY[]),
+('GraphQL', 'Backend', ARRAY[]::text[]),
 ('Git', 'Tools', ARRAY['Version Control', 'GitHub']),
 ('System Design', 'Architecture', ARRAY['System Architecture']),
 ('Machine Learning', 'AI/ML', ARRAY['ML']),
-('React Native', 'Mobile', ARRAY[]),
+('React Native', 'Mobile', ARRAY[]::text[]),
 ('Next.js', 'Frontend', ARRAY['NextJS']),
 ('Tailwind CSS', 'Frontend', ARRAY['Tailwind']),
 ('CI/CD', 'DevOps', ARRAY['Continuous Integration', 'Continuous Deployment'])
 ON CONFLICT (name) DO NOTHING;
+
+-- ─── GRANT PERMISSIONS TO SUPABASE ROLES ──────────────────────────────────────
+GRANT USAGE ON SCHEMA public TO postgres, anon, authenticated, service_role;
+GRANT ALL ON ALL TABLES IN SCHEMA public TO postgres, anon, authenticated, service_role;
+GRANT ALL ON ALL ROUTINES IN SCHEMA public TO postgres, anon, authenticated, service_role;
+GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO postgres, anon, authenticated, service_role;
+
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO postgres, anon, authenticated, service_role;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON ROUTINES TO postgres, anon, authenticated, service_role;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO postgres, anon, authenticated, service_role;
