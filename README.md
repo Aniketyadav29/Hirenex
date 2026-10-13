@@ -1,6 +1,6 @@
 <div align="center">
 
-# 🚀 HireNex
+# 🚀 HIRENEX
 
 ### **Next-Generation AI Talent Assessment & Career Intelligence Platform**
 
